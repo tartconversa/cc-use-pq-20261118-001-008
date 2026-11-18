@@ -1,5 +1,5 @@
-"""来源登记限制地区和允许的编码词表。"""
-from .contracts import digest, source, utc_now
+"""来源登记限制地区和允许的编码词表。词表更新不抹掉旧审核依据。"""
+from .contracts import digest, source, string_set, utc_now
 from .errors import MeridianError, require
 from .storage import decode, encode
 
@@ -53,6 +53,25 @@ class SourceRegistry:
         with self.store.transaction():
             self.store.db.execute("UPDATE sources SET active=0,version=version+1 WHERE source_id=?", (source_id,))
             self.store.event("source_deactivated", source_id, digest(source_data), now)
+        return {**self.describe(source_id), "duplicate": False}
+
+    def set_topics(self, source_id, topics):
+        with self.store.transaction():
+            return self._set_topics_locked(source_id, topics)
+
+    def _set_topics_locked(self, source_id, topics):
+        current = self.describe(source_id)
+        require(current["active"], "source_inactive", "source no longer accepts vocabulary updates")
+        topics = string_set(topics, "topics")
+        if topics == current["topics"]:
+            return {**current, "duplicate": True}
+        now = utc_now()
+        with self.store.transaction():
+            self.store.db.execute("UPDATE sources SET topics=?,version=version+1 WHERE source_id=?",
+                                  (encode(topics), source_id))
+            self.store.event("source_topics_updated", source_id,
+                             digest({"source_id": source_id, "before": current["topics"],
+                                     "after": topics}), now)
         return {**self.describe(source_id), "duplicate": False}
 
     def validate_for_ingest(self, source_id):

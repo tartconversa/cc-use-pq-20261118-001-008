@@ -19,15 +19,21 @@ class EvidenceExporter:
         for row in self.analytics._rows(query):
             item = row["item"]
             data = item["data"]
-            state = row["state"]
-            category = self.analytics._classify(row, query)
-            coding = state.get("coding")
+            states = row["states"]
+            category, judgment = self.analytics._resolve(row, query)
             rows.append({"origin": data["origin"], "external_id": data["external_id"],
                          "revision": item["revision"], "observation_hash": item["hash"],
                          "source_id": data["source_id"], "region": row["source"]["region"],
                          "story_key": data["story_key"], "published_at": data["published_at"],
-                         "category": category, "coding": coding,
-                         "reviewer_ids": [d["decision_id"] for d in state["decisions"]]})
+                         "category": category,
+                         "coding": {"topic": judgment["recorded_topic"],
+                                    "stance": judgment["stance"],
+                                    "audience": judgment["audience"]} if judgment else None,
+                         "basis_vocabulary": judgment["vocabulary"] if judgment else None,
+                         "basis_topic": judgment["topic"] if judgment else None,
+                         "judgments": self.analytics._resolved(row),
+                         "reviewer_ids": [decision["decision_id"] for state in states.values()
+                                          for decision in state["decisions"]]})
         rows.sort(key=lambda item: (item["origin"], item["external_id"]))
         return rows
 

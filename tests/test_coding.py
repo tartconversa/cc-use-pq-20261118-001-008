@@ -1,6 +1,6 @@
 import unittest
 from tests.common import ServiceCase
-from meridian.demo import decision
+from meridian.demo import LEGACY, SPLIT, decision
 from meridian.errors import MeridianError
 
 
@@ -8,13 +8,13 @@ class CodingTests(ServiceCase):
     def test_one_review_is_pending(self):
         self.add("a")
         self.service.coding.submit(decision("a", "alice", "positive"))
-        status = self.service.coding.status("local-fixture", "a", 1)
+        status = self.service.coding.status("local-fixture", "a", 1, LEGACY)
         self.assertEqual(status["status"], "awaiting_review")
         self.assertEqual(self.report()["excluded"], {"uncoded": 1})
 
     def test_matching_reviewers_accept(self):
         self.accepted("a")
-        status = self.service.coding.status("local-fixture", "a", 1)
+        status = self.service.coding.status("local-fixture", "a", 1, LEGACY)
         self.assertEqual(status["status"], "consensus")
         self.assertEqual(status["coding"]["stance"], "positive")
         self.assertEqual(self.report()["story_count"], 1)
@@ -31,8 +31,9 @@ class CodingTests(ServiceCase):
         self.service.coding.submit(decision("a", "alice", "positive"))
         self.service.coding.submit(decision("a", "bob", "negative"))
         ruling = {"origin": "local-fixture", "external_id": "a", "revision": 1,
-                  "adjudicator": "carol", "topic": "technology", "stance": "mixed",
-                  "audience": "general", "reason": "Different claims in same item"}
+                  "adjudicator": "carol", "vocabulary": LEGACY, "topic": "technology",
+                  "stance": "mixed", "audience": "general",
+                  "reason": "Different claims in same item"}
         result = self.service.coding.adjudicate(ruling)
         self.assertEqual(result["status"], "adjudicated")
         self.assertEqual(self.report()["regions"][0]["stance_counts"], {"mixed": 1})
@@ -42,8 +43,8 @@ class CodingTests(ServiceCase):
         self.service.coding.submit(decision("a", "alice", "positive"))
         self.service.coding.submit(decision("a", "bob", "negative"))
         ruling = {"origin": "local-fixture", "external_id": "a", "revision": 1,
-                  "adjudicator": "alice", "topic": "technology", "stance": "positive",
-                  "audience": "general", "reason": "I prefer my own answer"}
+                  "adjudicator": "alice", "vocabulary": LEGACY, "topic": "technology",
+                  "stance": "positive", "audience": "general", "reason": "I prefer my own answer"}
         with self.assertRaises(MeridianError) as caught:
             self.service.coding.adjudicate(ruling)
         self.assertEqual(caught.exception.code, "self_adjudication")
@@ -54,9 +55,9 @@ class CodingTests(ServiceCase):
         wrong["topic"] = "sports"
         with self.assertRaises(MeridianError) as caught:
             self.service.coding.submit(wrong)
-        self.assertEqual(caught.exception.code, "topic_outside_source")
+        self.assertEqual(caught.exception.code, "topic_outside_vocabulary")
 
-    def test_reviewer_can_submit_only_once(self):
+    def test_reviewer_can_submit_only_once_per_vocabulary(self):
         self.add("a")
         self.service.coding.submit(decision("a", "alice", "positive"))
         alternate = decision("a", "alice", "negative")

@@ -12,16 +12,19 @@ from .provenance import ProvenanceExplorer
 from .releases import ReleaseShelf
 from .sources import SourceRegistry
 from .storage import Store
+from .vocabularies import VocabularyRegistry
 
 
 class MeridianService:
     def __init__(self, path):
         self.store = Store(path)
+        self.vocabularies = VocabularyRegistry(self.store)
         self.sources = SourceRegistry(self.store)
         self.observations = ObservationLedger(self.store, self.sources)
-        self.coding = CodingDesk(self.store, self.observations, self.sources)
+        self.coding = CodingDesk(self.store, self.observations, self.sources, self.vocabularies)
         self.frames = CollectionFrames(self.store, self.sources, self.observations)
-        self.analytics = EvidenceAnalytics(self.store, self.observations, self.sources, self.coding)
+        self.analytics = EvidenceAnalytics(self.store, self.observations, self.sources,
+                                           self.coding, self.vocabularies)
         self.audit = IntegrityAudit(self.store)
         self.comparisons = ComparisonEngine(self.analytics)
         self.diagnostics = ReviewDiagnostics(self.store, self.observations, self.sources,
@@ -38,7 +41,7 @@ class MeridianService:
 
     def status(self):
         return {"event_head": self.store.head(),
+                "vocabularies": len(self.vocabularies.list()),
                 "sources": len(self.sources.list()),
                 "observations": len(self.observations.current()),
                 "releases": len(self.store.all("SELECT release_id FROM releases"))}
-

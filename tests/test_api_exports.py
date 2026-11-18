@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from fastapi.testclient import TestClient
 from meridian.api import create_app
-from meridian.demo import decision, observation, query, source
+from meridian.demo import LEGACY, decision, observation, query, source, vocabulary_payloads
 from meridian.errors import MeridianError
 from tests.common import ServiceCase
 
@@ -14,6 +14,9 @@ class ApiTests(unittest.TestCase):
         path = str(Path(self.temp.name) / "api.sqlite3")
         self.app = create_app(path)
         self.client = TestClient(self.app)
+        for payload in vocabulary_payloads():
+            registered = self.client.post("/vocabularies", json=payload)
+            assert registered.status_code == 200
 
     def tearDown(self):
         self.app.state.service.close()
@@ -77,6 +80,43 @@ class ApiTests(unittest.TestCase):
         response = self.client.post("/sources", json={"source_id": "only-id"})
         self.assertEqual(response.status_code, 422)
 
+    def test_http_vocabulary_registry_is_immutable(self):
+        listed = self.client.get("/vocabularies")
+        self.assertEqual(len(listed.json()), 2)
+        fetched = self.client.get(f"/vocabularies/{LEGACY}")
+        self.assertEqual(fetched.status_code, 200)
+        self.assertIn("broad caliber",
+                      fetched.json()["definitions"]["technology"]["explanation"])
+        missing = self.client.get("/vocabularies/v-unknown")
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json()["error"], "vocabulary_missing")
+        changed = vocabulary_payloads()[0] | {"rationale": "rewrite"}
+        conflict = self.client.post("/vocabularies", json=changed)
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.json()["error"], "vocabulary_conflict")
+
+    def test_http_source_topics_update(self):
+        self.client.post("/sources", json=source("a", "North", "Outlet A"))
+        updated = self.client.post("/sources/a/topics",
+                                   json={"topics": ["technology.ai", "culture"]})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["topics"], ["culture", "technology.ai"])
+        self.assertEqual(updated.json()["version"], 2)
+        repeat = self.client.post("/sources/a/topics",
+                                  json={"topics": ["technology.ai", "culture"]})
+        self.assertTrue(repeat.json()["duplicate"])
+
+    def test_http_fine_report_marks_pending_rereview(self):
+        self.client.post("/sources", json=source("a", "North", "Outlet A"))
+        self.client.post("/observations", json=observation("story", "a", "one"))
+        for reviewer in ("alice", "bob"):
+            self.client.post("/decisions", json=decision("story", reviewer, "positive"))
+        fine = query("fine", "vocab-split")
+        report = self.client.post("/reports", json=fine).json()
+        self.assertEqual(report["excluded"], {"pending_rereview": 1})
+        preview = self.client.post("/reports/preview", json=fine).json()
+        self.assertIn("unreviewed_legacy_labels", preview["quality"]["reasons"])
+
 
 class ExportTests(ServiceCase):
     def test_current_bundle_reconciles_evidence(self):
@@ -119,7 +159,7 @@ class ExportTests(ServiceCase):
     def test_coding_lineage_exposes_two_reviewers(self):
         self.accepted("a")
         result = self.service.provenance.coding_lineage("local-fixture", "a")
-        self.assertEqual(result["status"], "consensus")
+        self.assertEqual(result["status_by_vocabulary"], {LEGACY: "consensus"})
         self.assertEqual(len(result["decisions"]), 2)
 
 

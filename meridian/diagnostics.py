@@ -1,4 +1,4 @@
-"""解释观察记录未进入比较结果的原因。"""
+"""解释观察记录未进入比较结果的原因，包括尚待复审的旧稿。"""
 from collections import Counter, defaultdict
 from .contracts import report_query
 from .errors import require
@@ -19,18 +19,21 @@ class ReviewDiagnostics:
         for row in self.analytics._rows(spec):
             item = row["item"]
             data = item["data"]
-            state = row["state"]
+            states = row["states"]
             category = self.analytics._classify(row, spec)
-            if category not in {"uncoded", "disputed", "retracted"}:
+            if category not in {"uncoded", "disputed", "pending_rereview", "retracted"}:
                 continue
             if category == "retracted" and not include_retracted:
                 continue
             pending.append({"origin": data["origin"], "external_id": data["external_id"],
                             "revision": item["revision"], "source_id": data["source_id"],
                             "region": row["source"]["region"], "published_at": data["published_at"],
-                            "status": category, "reviewers": [decision["reviewer"] for decision in state["decisions"]],
+                            "status": category,
+                            "reviewers": sorted({decision["reviewer"] for state in states.values()
+                                                 for decision in state["decisions"]}),
+                            "resolved_vocabularies": sorted(self.analytics._resolved(row)),
                             "story_key": data["story_key"]})
-        order = {"disputed": 0, "uncoded": 1, "retracted": 2}
+        order = {"disputed": 0, "pending_rereview": 1, "uncoded": 2, "retracted": 3}
         pending.sort(key=lambda row: (order[row["status"]], row["published_at"],
                                       row["origin"], row["external_id"]))
         totals = Counter(row["status"] for row in pending)
@@ -47,10 +50,11 @@ class ReviewDiagnostics:
             reasons.append("outside_window")
         if spec["regions"] and source["region"] not in spec["regions"]:
             reasons.append("outside_region")
-        state = self.coding.status(origin, external_id, item["revision"])
+        states = self.coding.status_by_vocabulary(origin, external_id, item["revision"])
+        row = {"item": item, "source": source, "states": states}
         category = None
         if not reasons:
-            category = self.analytics._classify({"item": item, "source": source, "state": state}, spec)
+            category = self.analytics._classify(row, spec)
             if category != "eligible":
                 reasons.append(category)
         report = self.analytics.report(spec)
@@ -59,7 +63,10 @@ class ReviewDiagnostics:
         if category == "eligible" and not matches:
             reasons.append("aggregation_gap")
         return {"origin": origin, "external_id": external_id, "revision": item["revision"],
-                "source": source, "coding_status": state["status"],
+                "source": source,
+                "coding_status_by_vocabulary": {version: state["status"]
+                                                for version, state in states.items()},
+                "judgments": self.analytics._resolved(row),
                 "eligible": not reasons, "reasons": reasons, "story_rows": matches,
                 "query_hash": report["query_hash"], "event_head": report["event_head"]}
 
@@ -68,13 +75,15 @@ class ReviewDiagnostics:
         rows = self.analytics._rows(spec)
         grouped = defaultdict(list)
         for row in rows:
-            if self.analytics._classify(row, spec) != "eligible":
+            category, judgment = self.analytics._resolve(row, spec)
+            if category != "eligible":
                 continue
             data = row["item"]["data"]
-            coding = row["state"]["coding"]
-            key = (row["source"]["region"], data["story_key"], coding["topic"], coding["audience"])
+            key = (row["source"]["region"], data["story_key"], judgment["topic"],
+                   judgment["audience"])
             grouped[key].append({"origin": data["origin"], "external_id": data["external_id"],
-                                 "source_id": data["source_id"], "stance": coding["stance"]})
+                                 "source_id": data["source_id"], "stance": judgment["stance"],
+                                 "vocabulary": judgment["vocabulary"]})
         conflicts = []
         for key, items in sorted(grouped.items()):
             if len({item["stance"] for item in items}) > 1:
@@ -96,8 +105,9 @@ class ReviewDiagnostics:
             warnings.append("story_coding_conflicts")
         if queue["by_status"].get("disputed", 0):
             warnings.append("unresolved_decisions")
+        if queue["by_status"].get("pending_rereview", 0):
+            warnings.append("rereview_pending")
         return {"query_hash": report["query_hash"], "event_head": report["event_head"],
                 "quality": quality, "coverage": coverage, "queue": queue["by_status"],
                 "story_conflicts": conflicts["count"], "warnings": warnings,
                 "ready": quality["passed"] and not warnings}
-

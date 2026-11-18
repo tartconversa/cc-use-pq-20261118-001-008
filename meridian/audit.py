@@ -29,6 +29,15 @@ class IntegrityAudit:
                                     (row["origin"], row["external_id"], row["revision"]))
             if parent is None:
                 issues.append({"kind": "orphan_decision", "decision_id": row["decision_id"]})
+        vocabularies = {row["version_id"]: decode(row["definitions"])
+                        for row in self.store.all("SELECT * FROM vocabulary_versions")}
+        for table, key_field in (("decisions", "decision_id"), ("adjudications", "case_key")):
+            for row in self.store.all(f"SELECT * FROM {table}"):
+                definitions = vocabularies.get(row["vocabulary"])
+                if definitions is None:
+                    issues.append({"kind": f"{table}_vocabulary", key_field: row[key_field]})
+                elif row["topic"] not in definitions:
+                    issues.append({"kind": f"{table}_topic", key_field: row[key_field]})
         for row in self.store.all("SELECT * FROM batches"):
             counts = Counter(item["status"] for item in self.store.all(
                 "SELECT status FROM batch_rows WHERE batch_id=?", (row["batch_id"],)))

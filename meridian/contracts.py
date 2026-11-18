@@ -8,6 +8,8 @@ from .storage import encode
 
 STANCES = {"positive", "neutral", "negative", "mixed"}
 
+BASES = {"legacy", "parent", "fine"}
+
 
 def digest(value):
     return hashlib.sha256(encode(value).encode("utf-8")).hexdigest()
@@ -42,6 +44,37 @@ def string_set(value, name, maximum=32):
     return result
 
 
+def vocabulary_version(payload):
+    require(isinstance(payload, dict), "invalid_vocabulary", "vocabulary must be an object")
+    require(set(payload) == {"version_id", "definitions", "rationale"},
+            "invalid_vocabulary", "vocabulary fields mismatch")
+    version_id = text(payload["version_id"], "version_id")
+    rationale = text(payload["rationale"], "rationale", 800)
+    raw = payload["definitions"]
+    require(isinstance(raw, dict) and 0 < len(raw) <= 64, "invalid_vocabulary",
+            "definitions must be a nonempty object")
+    definitions = {}
+    for topic, entry in raw.items():
+        topic = text(topic, "topic", 80)
+        require(isinstance(entry, dict) and set(entry) == {"parent", "explanation"},
+                "invalid_vocabulary", "definition fields mismatch")
+        parent = entry["parent"]
+        if parent is not None:
+            parent = text(parent, "parent", 80)
+        definitions[topic] = {"parent": parent,
+                              "explanation": text(entry["explanation"], "explanation", 800)}
+    for topic, entry in definitions.items():
+        require(entry["parent"] is None or entry["parent"] in definitions,
+                "invalid_vocabulary", "parent topic is not defined")
+        seen = {topic}
+        node = topic
+        while definitions[node]["parent"] is not None:
+            node = definitions[node]["parent"]
+            require(node not in seen, "invalid_vocabulary", "parent links must not cycle")
+            seen.add(node)
+    return {"version_id": version_id, "definitions": definitions, "rationale": rationale}
+
+
 def source(payload):
     require(isinstance(payload, dict), "invalid_source", "source must be an object")
     require(set(payload) == {"source_id", "region", "outlet", "topics", "audiences"},
@@ -70,7 +103,7 @@ def observation(payload):
 
 def decision(payload):
     fields = {"decision_id", "origin", "external_id", "revision", "reviewer",
-              "topic", "stance", "audience", "reason"}
+              "vocabulary", "topic", "stance", "audience", "reason"}
     require(isinstance(payload, dict) and set(payload) == fields, "invalid_decision", "decision fields mismatch")
     data = {key: text(payload[key], key, 800 if key == "reason" else 160)
             for key in fields - {"revision"}}
@@ -83,7 +116,7 @@ def decision(payload):
 
 def adjudication(payload):
     fields = {"origin", "external_id", "revision", "adjudicator",
-              "topic", "stance", "audience", "reason"}
+              "vocabulary", "topic", "stance", "audience", "reason"}
     require(isinstance(payload, dict) and set(payload) == fields, "invalid_adjudication", "adjudication fields mismatch")
     data = decision({**{key: value for key, value in payload.items() if key != "adjudicator"},
                      "decision_id": "temporary", "reviewer": payload["adjudicator"]})
@@ -94,18 +127,29 @@ def adjudication(payload):
 
 
 def report_query(payload):
-    fields = {"start", "end", "regions", "topics", "audiences"}
-    require(isinstance(payload, dict) and set(payload) == fields, "invalid_query", "query fields mismatch")
+    required = {"start", "end", "regions", "topics", "audiences", "basis"}
+    require(isinstance(payload, dict) and required <= set(payload) <= required | {"vocabulary"},
+            "invalid_query", "query fields mismatch")
     start = timestamp(payload["start"], "start")
     end = timestamp(payload["end"], "end")
     require(start < end, "invalid_window", "start must precede end")
+    basis = text(payload["basis"], "basis", 20)
+    require(basis in BASES, "invalid_basis", "basis must be legacy, parent or fine")
+    vocabulary = payload.get("vocabulary")
+    if basis == "parent":
+        require(vocabulary is None, "invalid_query",
+                "parent basis spans vocabulary versions; vocabulary must be omitted")
+    else:
+        require(isinstance(vocabulary, str), "invalid_query",
+                "legacy and fine bases require an explicit vocabulary version")
+        vocabulary = text(vocabulary, "vocabulary")
     filters = {}
     for key in ("regions", "topics", "audiences"):
         value = payload[key]
         require(isinstance(value, list) and len(value) <= 32, "invalid_query", f"{key} must be list")
         filters[key] = sorted({text(item, key, 80) for item in value})
         require(len(filters[key]) == len(value), "invalid_query", f"duplicate {key}")
-    return {"start": start, "end": end, **filters}
+    return {"start": start, "end": end, **filters, "basis": basis, "vocabulary": vocabulary}
 
 
 def canonical_json(raw):

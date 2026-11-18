@@ -14,6 +14,16 @@ class SourceInput(BaseModel):
     audiences: list[str]
 
 
+class SourceTopicsInput(BaseModel):
+    topics: list[str]
+
+
+class VocabularyInput(BaseModel):
+    version_id: str
+    definitions: dict[str, dict]
+    rationale: str
+
+
 class ObservationInput(BaseModel):
     origin: str
     external_id: str
@@ -32,6 +42,7 @@ class DecisionInput(BaseModel):
     external_id: str
     revision: int
     reviewer: str
+    vocabulary: str
     topic: str
     stance: str
     audience: str
@@ -43,6 +54,7 @@ class AdjudicationInput(BaseModel):
     external_id: str
     revision: int
     adjudicator: str
+    vocabulary: str
     topic: str
     stance: str
     audience: str
@@ -55,6 +67,8 @@ class ReportInput(BaseModel):
     regions: list[str] = Field(default_factory=list)
     topics: list[str] = Field(default_factory=list)
     audiences: list[str] = Field(default_factory=list)
+    basis: str
+    vocabulary: str | None = None
 
 
 class ReleaseInput(BaseModel):
@@ -116,6 +130,18 @@ def create_app(path="meridian.sqlite3"):
     def status():
         return service.status()
 
+    @app.post("/vocabularies")
+    def register_vocabulary(payload: VocabularyInput):
+        return service.vocabularies.register(payload.model_dump())
+
+    @app.get("/vocabularies")
+    def list_vocabularies():
+        return service.vocabularies.list()
+
+    @app.get("/vocabularies/{version_id}")
+    def vocabulary(version_id: str):
+        return service.vocabularies.describe(version_id)
+
     @app.post("/sources")
     def register_source(payload: SourceInput):
         return service.sources.register(payload.model_dump())
@@ -127,6 +153,10 @@ def create_app(path="meridian.sqlite3"):
     @app.post("/sources/{source_id}/deactivate")
     def deactivate_source(source_id: str):
         return service.sources.deactivate(source_id)
+
+    @app.post("/sources/{source_id}/topics")
+    def update_source_topics(source_id: str, payload: SourceTopicsInput):
+        return service.sources.set_topics(source_id, payload.topics)
 
     @app.post("/observations")
     def ingest(payload: ObservationInput):
@@ -159,8 +189,10 @@ def create_app(path="meridian.sqlite3"):
         return service.coding.submit(payload.model_dump())
 
     @app.get("/decisions/{origin}/{external_id}/{revision}")
-    def coding_status(origin: str, external_id: str, revision: int):
-        return service.coding.status(origin, external_id, revision)
+    def coding_status(origin: str, external_id: str, revision: int, vocabulary: str | None = None):
+        if vocabulary is not None:
+            return service.coding.status(origin, external_id, revision, vocabulary)
+        return {"vocabularies": service.coding.status_by_vocabulary(origin, external_id, revision)}
 
     @app.post("/adjudications")
     def adjudicate(payload: AdjudicationInput):

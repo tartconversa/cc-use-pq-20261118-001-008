@@ -51,14 +51,15 @@ class ProvenanceExplorer:
         result = []
         for item in revisions:
             decisions = self.coding.decisions_for(origin, external_id, item["revision"])
-            state = self.coding.status(origin, external_id, item["revision"])
+            states = self.coding.status_by_vocabulary(origin, external_id, item["revision"])
             events = self.store.all("SELECT event_no,kind,occurred_at FROM events WHERE entity_key=? ORDER BY event_no",
                                     (f"{origin}/{external_id}",))
             result.append({"revision": item["revision"], "is_head": item["is_head"],
                            "status": item["status"], "hash": item["hash"],
                            "supersedes": item["supersedes"], "data": item["data"],
                            "decision_ids": [row["decision_id"] for row in decisions],
-                           "coding_status": state["status"],
+                           "coding_status_by_vocabulary": {version: state["status"]
+                                                           for version, state in states.items()},
                            "events": [dict(row) for row in events]})
         return {"origin": origin, "external_id": external_id, "revisions": result}
 
@@ -66,14 +67,16 @@ class ProvenanceExplorer:
         spec = report_query(query)
         rows = [row for row in self.analytics._rows(spec) if row["source"]["source_id"] == source_id]
         require(rows, "source_outside_query", "source has no observations in query")
-        categories = Counter(self.analytics._classify(row, spec) for row in rows)
+        categories = Counter()
         stories = defaultdict(list)
         for row in rows:
-            if self.analytics._classify(row, spec) != "eligible":
+            category, judgment = self.analytics._resolve(row, spec)
+            categories[category] += 1
+            if category != "eligible":
                 continue
             data = row["item"]["data"]
-            coding = row["state"]["coding"]
-            key = (row["source"]["region"], data["story_key"], coding["topic"], coding["audience"])
+            key = (row["source"]["region"], data["story_key"], judgment["topic"],
+                   judgment["audience"])
             stories[key].append(data["external_id"])
         report = self.analytics.report(spec)
         index = self._story_index(report)
@@ -82,7 +85,10 @@ class ProvenanceExplorer:
             combined = index.get(key)
             story_items.append({"key": self._story_key(key), "source_external_ids": sorted(ids),
                                 "combined_observation_count": combined["observation_count"] if combined else None,
-                                "combined_stance": combined["stance"] if combined else None})
+                                "combined_stance": combined["stance"] if combined else None,
+                                "vocabularies": combined["vocabularies"] if combined else None,
+                                "recorded_topics": combined["recorded_topics"] if combined else None,
+                                "mixed_basis": combined["mixed_basis"] if combined else None})
         return {"source_id": source_id, "query_hash": report["query_hash"],
                 "event_head": report["event_head"], "observation_count": len(rows),
                 "categories": dict(sorted(categories.items())), "stories": story_items}
@@ -90,12 +96,18 @@ class ProvenanceExplorer:
     def coding_lineage(self, origin, external_id):
         item = self.observations.describe(origin, external_id)
         decisions = self.coding.decisions_for(origin, external_id, item["revision"])
-        status = self.coding.status(origin, external_id, item["revision"])
-        key = f"{origin}/{external_id}/{item['revision']}"
-        ruling = self.store.one("SELECT * FROM adjudications WHERE case_key=?", (key,))
+        states = self.coding.status_by_vocabulary(origin, external_id, item["revision"])
+        rulings = self.store.all("SELECT * FROM adjudications WHERE origin=? AND external_id=? "
+                                 "AND revision=? ORDER BY vocabulary",
+                                 (origin, external_id, item["revision"]))
         return {"origin": origin, "external_id": external_id, "revision": item["revision"],
-                "observation_hash": item["hash"], "status": status["status"],
-                "decisions": decisions, "adjudication":
-                {field: ruling[field] for field in ("adjudicator", "topic", "stance", "audience",
-                                                   "reason", "event_no")} if ruling else None}
+                "observation_hash": item["hash"],
+                "status_by_vocabulary": {version: state["status"]
+                                         for version, state in states.items()},
+                "decisions": decisions,
+                "adjudications": {ruling["vocabulary"]:
+                                  {field: ruling[field] for field in ("adjudicator", "topic",
+                                                                      "stance", "audience",
+                                                                      "reason", "event_no")}
+                                  for ruling in rulings}}
 

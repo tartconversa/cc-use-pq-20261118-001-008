@@ -8,6 +8,10 @@ from pathlib import Path
 
 SCHEMA = """
 PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS vocabulary_versions (
+  version_id TEXT PRIMARY KEY, definitions TEXT NOT NULL, rationale TEXT NOT NULL,
+  created_at TEXT NOT NULL, event_no INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sources (
   source_id TEXT PRIMARY KEY, region TEXT NOT NULL, outlet TEXT NOT NULL,
   topics TEXT NOT NULL, audiences TEXT NOT NULL, active INTEGER NOT NULL,
@@ -27,17 +31,20 @@ CREATE TABLE IF NOT EXISTS observation_heads (
 );
 CREATE TABLE IF NOT EXISTS decisions (
   decision_id TEXT PRIMARY KEY, origin TEXT NOT NULL, external_id TEXT NOT NULL,
-  revision INTEGER NOT NULL, reviewer TEXT NOT NULL, topic TEXT NOT NULL,
-  stance TEXT NOT NULL, audience TEXT NOT NULL, reason TEXT NOT NULL,
+  revision INTEGER NOT NULL, reviewer TEXT NOT NULL,
+  vocabulary TEXT NOT NULL REFERENCES vocabulary_versions(version_id),
+  topic TEXT NOT NULL, stance TEXT NOT NULL, audience TEXT NOT NULL, reason TEXT NOT NULL,
   created_at TEXT NOT NULL, event_no INTEGER NOT NULL,
-  UNIQUE(origin, external_id, revision, reviewer),
+  UNIQUE(origin, external_id, revision, reviewer, vocabulary),
   FOREIGN KEY(origin, external_id, revision)
     REFERENCES observations(origin, external_id, revision)
 );
 CREATE INDEX IF NOT EXISTS decisions_observation ON decisions(origin, external_id, revision);
 CREATE TABLE IF NOT EXISTS adjudications (
   case_key TEXT PRIMARY KEY, origin TEXT NOT NULL, external_id TEXT NOT NULL,
-  revision INTEGER NOT NULL, adjudicator TEXT NOT NULL, topic TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  vocabulary TEXT NOT NULL REFERENCES vocabulary_versions(version_id),
+  adjudicator TEXT NOT NULL, topic TEXT NOT NULL,
   stance TEXT NOT NULL, audience TEXT NOT NULL, reason TEXT NOT NULL,
   decision_heads TEXT NOT NULL, created_at TEXT NOT NULL, event_no INTEGER NOT NULL,
   FOREIGN KEY(origin, external_id, revision)

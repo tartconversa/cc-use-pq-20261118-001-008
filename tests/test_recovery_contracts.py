@@ -65,7 +65,7 @@ class RecoveryAndContractTests(ServiceCase):
         result = self.service.diagnostics.observation_explanation("local-fixture", "a", query())
         self.assertFalse(result["eligible"])
         self.assertEqual(result["reasons"], ["uncoded"])
-        self.assertEqual(result["coding_status"], "awaiting_review")
+        self.assertEqual(result["coding_status_by_vocabulary"], {})
 
     def test_review_queue_prioritizes_disputes(self):
         self.add("pending")
